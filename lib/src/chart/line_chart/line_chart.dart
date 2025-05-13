@@ -71,6 +71,7 @@ class _LineChartState extends AnimatedWidgetBaseState<LineChart> {
         canBeScaled: widget.transformationConfig.scaleAxis != FlScaleAxis.none,
       ),
       data: showingData,
+      onActualRangeChanged: showingData.onActualRangeChanged,
     );
   }
 

@@ -7,6 +7,7 @@ import 'package:fl_chart/src/extensions/color_extension.dart';
 import 'package:fl_chart/src/extensions/gradient_extension.dart';
 import 'package:fl_chart/src/utils/lerp.dart';
 import 'package:flutter/material.dart' hide Image;
+import 'package:fl_chart/src/chart/base/axis_chart/actual_range_callback.dart';
 
 /// [LineChart] needs this class to render itself.
 ///
@@ -40,6 +41,8 @@ class LineChartData extends AxisChartData with EquatableMixin {
   /// [extraLinesData] property to have your extra lines.
   ///
   /// [clipData] forces the [LineChart] to draw lines inside the chart bounding box.
+  ///
+  /// [onActualRangeChanged] is a callback for when the actual visible range of the chart changes (after zoom/pan).
   LineChartData({
     this.lineBarsData = const [],
     this.betweenBarsData = const [],
@@ -59,6 +62,7 @@ class LineChartData extends AxisChartData with EquatableMixin {
     super.clipData = const FlClipData.none(),
     super.backgroundColor,
     super.rotationQuarterTurns,
+    this.onActualRangeChanged,
   }) : super(
           minX: minX ?? double.nan,
           maxX: maxX ?? double.nan,
@@ -82,6 +86,9 @@ class LineChartData extends AxisChartData with EquatableMixin {
   /// An important point is that you have to disable the default touch behaviour
   /// to show the tooltip manually, see [LineTouchData.handleBuiltInTouches].
   final List<ShowingTooltipIndicators> showingTooltipIndicators;
+
+  /// Callback for when the actual visible range of the chart changes (after zoom/pan).
+  final ChartActualRangeChangedCallback? onActualRangeChanged;
 
   /// Lerps a [BaseChartData] based on [t] value, check [Tween.lerp].
   @override
@@ -110,6 +117,7 @@ class LineChartData extends AxisChartData with EquatableMixin {
         lineTouchData: b.lineTouchData,
         showingTooltipIndicators: b.showingTooltipIndicators,
         rotationQuarterTurns: b.rotationQuarterTurns,
+        onActualRangeChanged: b.onActualRangeChanged,
       );
     } else {
       throw Exception('Illegal State');
@@ -137,6 +145,7 @@ class LineChartData extends AxisChartData with EquatableMixin {
     FlClipData? clipData,
     Color? backgroundColor,
     int? rotationQuarterTurns,
+    ChartActualRangeChangedCallback? onActualRangeChanged,
   }) =>
       LineChartData(
         lineBarsData: lineBarsData ?? this.lineBarsData,
@@ -158,6 +167,7 @@ class LineChartData extends AxisChartData with EquatableMixin {
         clipData: clipData ?? this.clipData,
         backgroundColor: backgroundColor ?? this.backgroundColor,
         rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
+        onActualRangeChanged: onActualRangeChanged ?? this.onActualRangeChanged,
       );
 
   /// Used for equality check, see [EquatableMixin].
@@ -181,6 +191,7 @@ class LineChartData extends AxisChartData with EquatableMixin {
         clipData,
         backgroundColor,
         rotationQuarterTurns,
+        onActualRangeChanged,
       ];
 }
 

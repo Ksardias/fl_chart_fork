@@ -5,6 +5,7 @@ import 'package:fl_chart/src/chart/base/axis_chart/transformation_config.dart';
 import 'package:fl_chart/src/chart/base/custom_interactive_viewer.dart';
 import 'package:fl_chart/src/extensions/fl_titles_data_extension.dart';
 import 'package:flutter/material.dart';
+import 'package:fl_chart/src/chart/base/axis_chart/actual_range_callback.dart';
 
 /// A builder to build a chart.
 ///
@@ -39,6 +40,7 @@ class AxisChartScaffoldWidget extends StatefulWidget {
     required this.chartBuilder,
     required this.data,
     this.transformationConfig = const FlTransformationConfig(),
+    this.onActualRangeChanged,
   });
 
   /// The builder to build the chart.
@@ -53,6 +55,9 @@ class AxisChartScaffoldWidget extends StatefulWidget {
   /// Used to configure scaling and panning of the chart.
   /// {@endtemplate}
   final FlTransformationConfig transformationConfig;
+
+  /// Optional callback for when the actual visible range of the chart changes (after zoom/pan).
+  final ChartActualRangeChangedCallback? onActualRangeChanged;
 
   @override
   State<AxisChartScaffoldWidget> createState() =>
@@ -130,6 +135,28 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
 
   void _transformationControllerListener() {
     setState(() {});
+    // Notify about the new visible range if callback is provided
+    if (widget.onActualRangeChanged != null && _chartKey.currentContext != null) {
+      final renderBox = _chartKey.currentContext!.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
+        final rect = Offset.zero & renderBox.size;
+        final adjustedRect = _calculateAdjustedRect(rect) ?? rect;
+        // Compute visible min/max X/Y in chart coordinates
+        final data = widget.data;
+        final minX = data.minX + (adjustedRect.left / rect.width) * data.horizontalDiff;
+        final maxX = data.minX + (adjustedRect.right / rect.width) * data.horizontalDiff;
+        final minY = data.maxY - (adjustedRect.bottom / rect.height) * data.verticalDiff;
+        final maxY = data.maxY - (adjustedRect.top / rect.height) * data.verticalDiff;
+        widget.onActualRangeChanged!(
+          ActualRangeChangedArgs(
+            minX: minX,
+            maxX: maxX,
+            minY: minY,
+            maxY: maxY,
+          ),
+        );
+      }
+    }
   }
 
   // Applies the inverse transformation to the chart to get the zoomed
