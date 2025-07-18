@@ -5,16 +5,16 @@ import 'package:fl_chart/src/chart/base/axis_chart/transformation_config.dart';
 import 'package:fl_chart/src/chart/base/custom_interactive_viewer.dart';
 import 'package:fl_chart/src/extensions/fl_titles_data_extension.dart';
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show clampDouble;
 
 /// A builder to build a chart.
 ///
 /// The [chartVirtualRect] is the virtual chart virtual rect to be used when
 /// laying out the chart's content. It is transformed based on users'
 /// interactions like scaling and panning.
-typedef ChartBuilder = Widget Function(
-  BuildContext context,
-  Rect? chartVirtualRect,
-);
+typedef ChartBuilder =
+    Widget Function(BuildContext context, Rect? chartVirtualRect);
 
 /// A scaffold to show a scalable axis-based chart
 ///
@@ -61,8 +61,10 @@ class AxisChartScaffoldWidget extends StatefulWidget {
 
 class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
   late TransformationController _transformationController;
+  Matrix4? _lastNotifiedMatrix;
 
   final _chartKey = GlobalKey();
+  Rect? _lastKnownViewRect;
 
   FlTransformationConfig get _transformationConfig =>
       widget.transformationConfig;
@@ -80,14 +82,20 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
     super.initState();
     _transformationController =
         _transformationConfig.transformationController ??
-            TransformationController();
+        TransformationController();
     _transformationController.addListener(_transformationControllerListener);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _notifyViewportChange();
+      }
+    });
   }
 
   @override
   void dispose() {
     _transformationController.removeListener(_transformationControllerListener);
     if (_transformationConfig.transformationController == null) {
+      // Only dispose if it was an internally created controller
       _transformationController.dispose();
     }
     super.dispose();
@@ -97,39 +105,213 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
   void didUpdateWidget(AxisChartScaffoldWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    switch ((
-      oldWidget.transformationConfig.transformationController,
-      widget.transformationConfig.transformationController
-    )) {
-      case (null, null):
-        break;
-      case (null, TransformationController()):
-        _transformationController.dispose();
-        _transformationController =
-            widget.transformationConfig.transformationController!;
-        _transformationController
-            .addListener(_transformationControllerListener);
-      case (TransformationController(), null):
-        _transformationController
-            .removeListener(_transformationControllerListener);
-        _transformationController = TransformationController();
-        _transformationController
-            .addListener(_transformationControllerListener);
-      case (TransformationController(), TransformationController()):
-        if (oldWidget.transformationConfig.transformationController !=
-            widget.transformationConfig.transformationController) {
-          _transformationController
-              .removeListener(_transformationControllerListener);
-          _transformationController =
-              widget.transformationConfig.transformationController!;
-          _transformationController
-              .addListener(_transformationControllerListener);
+    final oldCtrl = oldWidget.transformationConfig.transformationController;
+    final newCtrl = widget.transformationConfig.transformationController;
+
+    if (oldCtrl != newCtrl) {
+      _transformationController.removeListener(
+        _transformationControllerListener,
+      );
+      if (newCtrl == null) {
+        if (oldCtrl != null) {
+        } else {
+          _transformationController.dispose();
         }
+        _transformationController = TransformationController();
+      } else {
+        if (oldCtrl == null) {
+          _transformationController.dispose();
+        }
+        _transformationController = newCtrl;
+      }
+      _transformationController.addListener(_transformationControllerListener);
+      _lastNotifiedMatrix = null;
+    }
+
+    if (oldWidget.data.minX != widget.data.minX ||
+        oldWidget.data.maxX != widget.data.maxX ||
+        oldWidget.transformationConfig.scaleAxis !=
+            widget.transformationConfig.scaleAxis) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _notifyViewportChange();
+        }
+      });
     }
   }
 
   void _transformationControllerListener() {
+    if (_lastNotifiedMatrix == _transformationController.value) {
+      return;
+    }
+    _lastNotifiedMatrix = _transformationController.value;
+
     setState(() {});
+    _notifyViewportChange();
+  }
+
+  void _notifyViewportChange() {
+    // print('[AxisChartScaffoldWidget] _notifyViewportChange CALLED.');
+
+    if (widget.transformationConfig.onViewportChanged == null) {
+      // print(
+        // '[AxisChartScaffoldWidget] EXIT: onViewportChanged callback is null.',
+      // );
+      return;
+    }
+    if (_lastKnownViewRect == null) {
+      // print('[AxisChartScaffoldWidget] EXIT: _lastKnownViewRect is null.');
+      return;
+    }
+
+    final viewRect = _lastKnownViewRect!;
+    // print('[AxisChartScaffoldWidget] viewRect: $viewRect');
+
+    final currentMatrix = _transformationController.value;
+    // print('[AxisChartScaffoldWidget] Transformation Matrix:');
+    // print('[AxisChartScaffoldWidget]   ${currentMatrix.row0}');
+    // print('[AxisChartScaffoldWidget]   ${currentMatrix.row1}');
+    // print('[AxisChartScaffoldWidget]   ${currentMatrix.row2}');
+    // print('[AxisChartScaffoldWidget]   ${currentMatrix.row3}');
+
+    final double scaleX =
+        currentMatrix.getMaxScaleOnAxis(); // A way to get overall scale
+    // Alternatively, if you know it's primarily a 2D scale and translation:
+    // final double scaleX = currentMatrix.entry(0, 0);
+    // final double scaleY = currentMatrix.entry(1, 1);
+    final double translateX = currentMatrix.entry(0, 3);
+    final double translateY = currentMatrix.entry(1, 3);
+
+    // print('[AxisChartScaffoldWidget] Extracted Scale X (approx): $scaleX');
+    // print('[AxisChartScaffoldWidget] Extracted Scale Y: $scaleY');
+    // print('[AxisChartScaffoldWidget] Extracted Translation X: $translateX');
+    // print('[AxisChartScaffoldWidget] Extracted Translation Y: $translateY');
+
+    // _calculateAdjustedRect uses _transformationController.value, which is up-to-date
+    // because _transformationControllerListener calls setState before _notifyViewportChange.
+    final Rect? virtualRect = _calculateAdjustedRect(viewRect);
+    if (virtualRect == null) {
+      // print(
+        // '[AxisChartScaffoldWidget] virtualRect is null (no effective transformation / scale is 1.0). Notifying with full data range.',
+      // );
+      if (widget.data.minX != null && widget.data.maxX != null) {
+        widget.transformationConfig.onViewportChanged!(
+          widget.data.minX!,
+          widget.data.maxX!,
+        );
+      }
+      return;
+    }
+    // print(
+      // '[AxisChartScaffoldWidget] virtualRect (transformed viewRect): $virtualRect',
+    // );
+
+    final double dataMinX = widget.data.minX ?? 0;
+    final double dataMaxX =
+        widget.data.maxX ?? 1; // Default to 1 if null to avoid division by zero
+    // print('[AxisChartScaffoldWidget] dataMinX: $dataMinX, dataMaxX: $dataMaxX');
+
+    final double dataRangeX = dataMaxX - dataMinX;
+    if (dataRangeX <= 0) {
+      // print(
+        // '[AxisChartScaffoldWidget] EXIT: dataRangeX is <= 0 ($dataRangeX). Cannot calculate viewport.',
+      // );
+      // Optionally notify with full range if sensible, or do nothing
+      if (widget.data.minX != null && widget.data.maxX != null) {
+        widget.transformationConfig.onViewportChanged!(
+          widget.data.minX!,
+          widget.data.maxX!,
+        );
+      }
+      return;
+    }
+    // print('[AxisChartScaffoldWidget] dataRangeX: $dataRangeX');
+
+    // The width of the content area if it were drawn without any scaling.
+    // This should correspond to the viewRect's width when scale is 1.0.
+    // When scaled, virtualRect.width represents the original content width
+    // that is now *contained* within the viewRect.
+    // However, our goal is to map the *current* viewRect boundaries (0 to viewRect.width)
+    // back to the data coordinate system, considering the zoom/pan.
+
+    // The virtualRect's left and right are in the *unscaled* content's coordinate space.
+    // We need to find out what proportion of the *total unscaled content width that fits the data range*
+    // these virtualRect boundaries represent.
+
+    // If scale is 1, virtualRect is viewRect.
+    // If we are zoomed in (scale > 1), virtualRect is smaller than viewRect.
+    // The `currentContentWidth` used below should represent the width of the
+    // chart's content *as if it were laid out to fit the current dataMinX to dataMaxX range,
+    // without any interactive scaling applied by the TransformationController yet*.
+    // This is essentially viewRect.width because the chart painter draws into that rect.
+    final double currentContentWidth = viewRect.width;
+    // print(
+      // '[AxisChartScaffoldWidget] currentContentWidth (viewRect.width): $currentContentWidth',
+    // );
+
+    if (currentContentWidth == 0) {
+      // print(
+        // '[AxisChartScaffoldWidget] EXIT: currentContentWidth is 0. Cannot calculate viewport.',
+      // );
+      return;
+    }
+
+    // virtualRect.left is the x-coordinate in the chart's untransformed content space
+    // that is currently aligned with the left edge of the viewport.
+    // virtualRect.width is the total width of the chart's untransformed content
+    // that is currently visible in the viewport.
+
+    // The proportion of the data range that is to the left of the viewport's left edge
+    // is (virtualRect.left / currentContentWidth).
+    // The x-value at the left edge of the viewport is dataMinX + (this proportion) * dataRangeX.
+    // This seems more direct.
+
+    // Let's consider the transformation:
+    // screen_x = content_x * scale + translate_x
+    // content_x = (screen_x - translate_x) / scale
+    // Here, screen_x = 0 (left edge of viewRect) and screen_x = viewRect.width (right edge)
+    // content_x_left_edge = (0 - translateX) / scaleX
+    // content_x_right_edge = (viewRect.width - translateX) / scaleX
+    // These content_x values are relative to the chart's drawing origin (usually 0,0 of its paintable area)
+
+    // The virtualRect.left IS (0 - translateX) / scaleX if viewRect starts at 0.
+    // The virtualRect.right IS (viewRect.width - translateX) / scaleX if viewRect starts at 0.
+    // So virtualRect.left and virtualRect.right are already the content coordinates we need.
+
+    if (scaleX == 0) {
+      print(
+        '[AxisChartScaffoldWidget] EXIT: scaleX is 0. Cannot calculate viewport.',
+      );
+      if (widget.data.minX != null && widget.data.maxX != null) {
+        widget.transformationConfig.onViewportChanged!(
+          widget.data.minX!,
+          widget.data.maxX!,
+        );
+      }
+      return;
+    }
+
+    // Content X-coordinate (in the space of viewRect.width) at the left edge of the viewport
+    final double contentXAtViewLeft = (0 - translateX) / scaleX;
+    // Content X-coordinate (in the space of viewRect.width) at the right edge of the viewport
+    final double contentXAtViewRight =
+        (currentContentWidth - translateX) / scaleX;
+
+    // Map these content coordinates to data coordinates
+    final double calculatedVisibleMinX =
+        dataMinX + (contentXAtViewLeft / currentContentWidth) * dataRangeX;
+    final double calculatedVisibleMaxX =
+        dataMinX + (contentXAtViewRight / currentContentWidth) * dataRangeX;
+
+    // print(
+      // '[AxisChartScaffoldWidget] Calculated raw visibleMinX: $calculatedVisibleMinX, visibleMaxX: $calculatedVisibleMaxX',
+    // );
+
+    // Pass the raw calculated values. The client can decide how to interpret them.
+    widget.transformationConfig.onViewportChanged!(
+      calculatedVisibleMinX,
+      calculatedVisibleMaxX,
+    );
   }
 
   // Applies the inverse transformation to the chart to get the zoomed
@@ -201,9 +383,10 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
 
   List<Widget> _stackWidgets(BoxConstraints constraints) {
     final margin = widget.data.titlesData.allSidesPadding;
-    final borderData = widget.data.borderData.isVisible()
-        ? widget.data.borderData.border
-        : null;
+    final borderData =
+        widget.data.borderData.isVisible()
+            ? widget.data.borderData.border
+            : null;
 
     final borderWidth =
         borderData == null ? 0 : borderData.dimensions.horizontal;
@@ -216,6 +399,7 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
       constraints.maxWidth - margin.horizontal - borderWidth,
       constraints.maxHeight - margin.vertical - borderHeight,
     );
+    _lastKnownViewRect = rect;
 
     final adjustedRect = _calculateAdjustedRect(rect);
 
@@ -232,20 +416,16 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
     final child = switch (_transformationConfig.scaleAxis) {
       FlScaleAxis.none => chart,
       FlScaleAxis() => CustomInteractiveViewer(
-          transformationController: _transformationController,
-          clipBehavior: Clip.none,
-          trackpadScrollCausesScale:
-              _transformationConfig.trackpadScrollCausesScale,
-          maxScale: _transformationConfig.maxScale,
-          minScale: _transformationConfig.minScale,
-          panEnabled: _transformationConfig.panEnabled,
-          scaleEnabled: _transformationConfig.scaleEnabled,
-          child: SizedBox(
-            width: rect.width,
-            height: rect.height,
-            child: chart,
-          ),
-        ),
+        transformationController: _transformationController,
+        clipBehavior: Clip.none,
+        trackpadScrollCausesScale:
+            _transformationConfig.trackpadScrollCausesScale,
+        maxScale: _transformationConfig.maxScale,
+        minScale: _transformationConfig.minScale,
+        panEnabled: _transformationConfig.panEnabled,
+        scaleEnabled: _transformationConfig.scaleEnabled,
+        child: SizedBox(width: rect.width, height: rect.height, child: chart),
+      ),
     };
 
     final widgets = <Widget>[
@@ -314,9 +494,7 @@ class _AxisChartScaffoldWidgetState extends State<AxisChartScaffoldWidget> {
       builder: (context, constraints) {
         return RotatedBox(
           quarterTurns: widget.data.rotationQuarterTurns,
-          child: Stack(
-            children: _stackWidgets(constraints),
-          ),
+          child: Stack(children: _stackWidgets(constraints)),
         );
       },
     );

@@ -11,11 +11,12 @@ class FlTransformationConfig {
     this.scaleEnabled = true,
     this.trackpadScrollCausesScale = false,
     this.transformationController,
-  })  : assert(minScale >= 1, 'minScale must be greater than or equal to 1'),
-        assert(
-          maxScale >= minScale,
-          'maxScale must be greater than or equal to minScale',
-        );
+    this.onViewportChanged,
+  }) : assert(minScale >= 1, 'minScale must be greater than or equal to 1'),
+       assert(
+         maxScale >= minScale,
+         'maxScale must be greater than or equal to minScale',
+       );
 
   /// Determines what axis of the chart should be scaled.
   final FlScaleAxis scaleAxis;
@@ -47,4 +48,9 @@ class FlTransformationConfig {
 
   /// The transformation controller to control the transformation of the chart.
   final TransformationController? transformationController;
+
+  /// Called when the visible X-axis range of the chart changes due to panning or zooming.
+  ///
+  /// Provides the minimum and maximum X values (in data coordinates) currently visible.
+  final void Function(double minX, double maxX)? onViewportChanged;
 }
