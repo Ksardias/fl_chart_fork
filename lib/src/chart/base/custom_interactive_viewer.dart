@@ -1124,7 +1124,7 @@ Quad _getAxisAlignedBoundingBoxWithRotation(Rect rect, double rotation) {
 // is completely contained within the boundary (inclusively), then returns
 // Offset.zero.
 Offset _exceedsBy(Quad boundary, Quad viewport) {
-  final List<Vector3> viewportPoints viewportPoints = <Vector3>[
+  final List<Vector3> viewportPoints = <Vector3>[
     viewport.point0,
     viewport.point1,
     viewport.point2,
